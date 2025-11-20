@@ -1,0 +1,7 @@
+{
+  "name": "BeReal Redesign",
+  "description": "A high-fidelity redesign of the BeReal profile experience featuring memories calendar, pinned bereals, and smooth transitions.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
