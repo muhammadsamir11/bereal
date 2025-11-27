@@ -330,6 +330,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col justify-center h-full w-full relative bg-neutral-950 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.3),rgba(255,255,255,0))]">
+      {/* Logo */}
       <div className="hidden flex-col items-center py-4 sm:flex z-20">
         <svg
           width="84"
@@ -354,6 +355,7 @@ const App: React.FC = () => {
         </svg>
       </div>
 
+      {/* Mobile View */}
       <div className="relative z-10 bg-black flex flex-col h-screen max-h-screen sm:max-h-[650px] w-full max-w-md sm:w-[360px] mx-auto border-0 border-white/10 sm:border rounded-none sm:rounded-3xl overflow-hidden shadow-2xl">
         <AnimatePresence mode="popLayout" custom={direction} initial={false}>
           <motion.div
