@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { motion } from "framer-motion";
 import { useDeviceOrientation } from "../hooks/useDeviceOrientation";
+import { segmentPerson } from "../utils/personSegmentation";
 
 interface DepthPhoto3DProps {
   src: string;
@@ -14,8 +15,8 @@ interface DepthPhoto3DProps {
 }
 
 /**
- * 3D Depth Photo Component with Gaussian Splatting-like parallax
- * Creates layered depth effect by separating foreground from background
+ * 3D Spatial Photo Component
+ * Cuts the person from the background and displays them as separate layers
  */
 const DepthPhoto3D: React.FC<DepthPhoto3DProps> = ({
   src,
@@ -23,169 +24,113 @@ const DepthPhoto3D: React.FC<DepthPhoto3DProps> = ({
   className = "",
   width = 128,
   height = 176,
-  tiltIntensity = 0.7,
-  depthIntensity = 1.0,
+  tiltIntensity = 0.8,
+  depthIntensity = 1.5,
   onReady,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [depthMask, setDepthMask] = useState<string | null>(null);
+  const [personMask, setPersonMask] = useState<string | null>(null);
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Get device orientation (gyroscope on mobile, mouse on desktop)
+  // Get device orientation
   const orientation = useDeviceOrientation(containerRef, {
-    smoothing: 0.1,
-    sensitivity: 1.5,
+    smoothing: 0.08,
+    sensitivity: 2.0,
     enableMouse: true,
   });
 
-  // Generate depth mask for subject isolation
+  // Generate segmentation and create separated layers
   useEffect(() => {
-    const generateDepthMask = async () => {
+    let cancelled = false;
+
+    const processImage = async () => {
       try {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = reject;
-          img.src = src;
-        });
-
-        // Higher resolution for better mask quality
-        canvas.width = 256;
-        canvas.height = Math.round(256 * (height / width));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-
-        // Create depth map based on:
-        // 1. Radial distance from face center (portrait assumption)
-        // 2. Skin tone detection
-        // 3. Edge detection for subject boundaries
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height * 0.35; // Face typically in upper portion
-        const maxRadius = Math.max(canvas.width, canvas.height) * 0.6;
-
-        // First pass: detect skin tones and luminance
-        const depthValues: number[] = new Array(data.length / 4);
-
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-
-          const pixelIndex = i / 4;
-          const x = pixelIndex % canvas.width;
-          const y = Math.floor(pixelIndex / canvas.width);
-
-          // Distance from face center
-          const dx = x - centerX;
-          const dy = y - centerY;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          const radialDepth = 1 - Math.min(distance / maxRadius, 1);
-
-          // Skin tone detection (works for various skin tones)
-          const isSkinTone = detectSkinTone(r, g, b);
-          const skinBoost = isSkinTone ? 0.3 : 0;
-
-          // Luminance-based depth (brighter = closer for portraits)
-          const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-          const luminanceDepth = luminance * 0.3;
-
-          // Saturation-based (subjects often more saturated)
-          const max = Math.max(r, g, b);
-          const min = Math.min(r, g, b);
-          const saturation = max === 0 ? 0 : (max - min) / max;
-          const saturationBoost = saturation * 0.15;
-
-          // Combine factors with weights
-          let depth =
-            radialDepth * 0.5 + luminanceDepth + skinBoost + saturationBoost;
-
-          // Apply sigmoid for sharper separation
-          depth = sigmoid(depth * 2 - 1) * 1.2;
-          depthValues[pixelIndex] = Math.min(1, Math.max(0, depth));
-        }
-
-        // Apply edge-aware smoothing
-        const smoothedDepth = edgeAwareSmooth(
-          depthValues,
-          canvas.width,
-          canvas.height,
-          data
+        // Get AI segmentation mask
+        const mask = await segmentPerson(
+          src,
+          512,
+          Math.round(512 * (height / width))
         );
 
-        // Create the mask image
-        const maskCanvas = document.createElement("canvas");
-        maskCanvas.width = canvas.width;
-        maskCanvas.height = canvas.height;
-        const maskCtx = maskCanvas.getContext("2d")!;
-        const maskData = maskCtx.createImageData(canvas.width, canvas.height);
+        if (cancelled) return;
 
-        for (let i = 0; i < smoothedDepth.length; i++) {
-          const value = Math.round(smoothedDepth[i] * 255);
-          maskData.data[i * 4] = value;
-          maskData.data[i * 4 + 1] = value;
-          maskData.data[i * 4 + 2] = value;
-          maskData.data[i * 4 + 3] = 255;
+        if (mask) {
+          setPersonMask(mask);
+
+          // Create background with person removed (filled/blurred)
+          const bgImage = await createBackgroundWithPersonRemoved(src, mask);
+          if (!cancelled) {
+            setBackgroundImage(bgImage);
+          }
         }
 
-        maskCtx.putImageData(maskData, 0, 0);
-
-        // Apply Gaussian blur for smoother transitions
-        maskCtx.filter = "blur(4px)";
-        maskCtx.drawImage(maskCanvas, 0, 0);
-        maskCtx.filter = "none";
-
-        setDepthMask(maskCanvas.toDataURL());
         setIsLoaded(true);
         onReady?.();
       } catch (error) {
-        console.warn("Depth mask generation failed:", error);
-        setIsLoaded(true);
-        onReady?.();
+        console.error("Segmentation error:", error);
+        if (!cancelled) {
+          setIsLoaded(true);
+          onReady?.();
+        }
       }
     };
 
-    generateDepthMask();
+    processImage();
+    return () => {
+      cancelled = true;
+    };
   }, [src, width, height, onReady]);
 
-  // Calculate parallax offsets for different depth layers
-  const foregroundOffset = useMemo(
+  // Parallax offsets - person moves forward, background moves back
+  const personOffset = useMemo(
     () => ({
-      x: orientation.x * 12 * depthIntensity,
-      y: orientation.y * 12 * depthIntensity,
-      z: 30,
-    }),
-    [orientation.x, orientation.y, depthIntensity]
-  );
-
-  const midgroundOffset = useMemo(
-    () => ({
-      x: orientation.x * 6 * depthIntensity,
-      y: orientation.y * 6 * depthIntensity,
-      z: 15,
+      x: orientation.x * 18 * depthIntensity,
+      y: orientation.y * 18 * depthIntensity,
     }),
     [orientation.x, orientation.y, depthIntensity]
   );
 
   const backgroundOffset = useMemo(
     () => ({
-      x: orientation.x * -3 * depthIntensity,
-      y: orientation.y * -3 * depthIntensity,
-      z: 0,
+      x: orientation.x * -6 * depthIntensity,
+      y: orientation.y * -6 * depthIntensity,
     }),
     [orientation.x, orientation.y, depthIntensity]
   );
 
   // 3D rotation
-  const rotateX = -orientation.y * 15 * tiltIntensity;
-  const rotateY = orientation.x * 15 * tiltIntensity;
+  const rotateX = -orientation.y * 10 * tiltIntensity;
+  const rotateY = orientation.x * 10 * tiltIntensity;
+
+  // Show simple fallback while loading or if no mask
+  if (!isLoaded || !personMask) {
+    return (
+      <motion.div
+        ref={containerRef}
+        className={`relative overflow-hidden ${className}`}
+        style={{ width, height, perspective: 600 }}
+      >
+        <motion.img
+          src={src}
+          alt={alt}
+          className="w-full h-full object-cover"
+          animate={{
+            rotateX: -orientation.y * 8,
+            rotateY: orientation.x * 8,
+            x: orientation.x * 5,
+            y: orientation.y * 5,
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 25 }}
+        />
+        {!isLoaded && (
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+            <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+          </div>
+        )}
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div
@@ -194,7 +139,7 @@ const DepthPhoto3D: React.FC<DepthPhoto3DProps> = ({
       style={{
         width,
         height,
-        perspective: 600,
+        perspective: 800,
         transformStyle: "preserve-3d",
       }}
     >
@@ -202,10 +147,7 @@ const DepthPhoto3D: React.FC<DepthPhoto3DProps> = ({
       <motion.div
         className="w-full h-full relative"
         style={{ transformStyle: "preserve-3d" }}
-        animate={{
-          rotateX,
-          rotateY,
-        }}
+        animate={{ rotateX, rotateY }}
         transition={{
           type: "spring",
           stiffness: 400,
@@ -213,264 +155,297 @@ const DepthPhoto3D: React.FC<DepthPhoto3DProps> = ({
           mass: 0.3,
         }}
       >
-        {/* Background layer - moves opposite direction (parallax) */}
+        {/* BACKGROUND LAYER - Only background, person area filled */}
         <motion.div
           className="absolute inset-0"
           style={{
-            transformStyle: "preserve-3d",
-            transform: `translateZ(${backgroundOffset.z}px)`,
+            transform: "translateZ(-25px)",
+            transformOrigin: "center center",
           }}
           animate={{
             x: backgroundOffset.x,
             y: backgroundOffset.y,
-            scale: 1.15, // Slightly larger to prevent edges showing
+            scale: 1.25,
           }}
-          transition={{
-            type: "spring",
-            stiffness: 300,
-            damping: 25,
-          }}
+          transition={{ type: "spring", stiffness: 200, damping: 25 }}
         >
-          <img
-            src={src}
-            alt=""
-            className="w-full h-full object-cover"
-            style={{
-              filter: "blur(1px) brightness(0.9)",
-            }}
-            aria-hidden="true"
-          />
-        </motion.div>
-
-        {/* Midground layer */}
-        <motion.div
-          className="absolute inset-0"
-          style={{
-            transformStyle: "preserve-3d",
-            transform: `translateZ(${midgroundOffset.z}px)`,
-          }}
-          animate={{
-            x: midgroundOffset.x,
-            y: midgroundOffset.y,
-            scale: 1.08,
-          }}
-          transition={{
-            type: "spring",
-            stiffness: 300,
-            damping: 25,
-          }}
-        >
-          {depthMask && (
-            <div
-              className="w-full h-full"
-              style={{
-                maskImage: `url(${depthMask})`,
-                WebkitMaskImage: `url(${depthMask})`,
-                maskSize: "cover",
-                WebkitMaskSize: "cover",
-                maskPosition: "center",
-                WebkitMaskPosition: "center",
-              }}
-            >
-              <img
-                src={src}
-                alt=""
-                className="w-full h-full object-cover"
-                style={{ filter: "brightness(0.95)" }}
-                aria-hidden="true"
-              />
-            </div>
+          {backgroundImage ? (
+            <img
+              src={backgroundImage}
+              alt=""
+              className="w-full h-full object-cover"
+              aria-hidden="true"
+            />
+          ) : (
+            <img
+              src={src}
+              alt=""
+              className="w-full h-full object-cover blur-sm"
+              aria-hidden="true"
+            />
           )}
         </motion.div>
 
-        {/* Foreground layer - subject/face (moves most) */}
+        {/* PERSON LAYER - Only the person, background is transparent */}
         <motion.div
           className="absolute inset-0"
           style={{
-            transformStyle: "preserve-3d",
-            transform: `translateZ(${foregroundOffset.z}px)`,
+            transform: "translateZ(30px)",
+            transformOrigin: "center center",
           }}
           animate={{
-            x: foregroundOffset.x,
-            y: foregroundOffset.y,
-            scale: 1.02,
+            x: personOffset.x,
+            y: personOffset.y,
+            scale: 1.0,
           }}
           transition={{
             type: "spring",
             stiffness: 350,
             damping: 28,
+            mass: 0.4,
           }}
         >
-          {depthMask ? (
-            <div
-              className="w-full h-full"
-              style={{
-                maskImage: `url(${depthMask})`,
-                WebkitMaskImage: `url(${depthMask})`,
-                maskSize: "cover",
-                WebkitMaskSize: "cover",
-                maskPosition: "center",
-                WebkitMaskPosition: "center",
-              }}
-            >
-              <img src={src} alt={alt} className="w-full h-full object-cover" />
-            </div>
-          ) : (
-            <img src={src} alt={alt} className="w-full h-full object-cover" />
-          )}
+          {/* Canvas with transparent background showing only the person */}
+          <PersonCutout src={src} mask={personMask} alt={alt} />
         </motion.div>
 
-        {/* Holographic shine overlay */}
+        {/* HOLOGRAPHIC SHINE */}
         <motion.div
           className="absolute inset-0 pointer-events-none"
           style={{
-            transform: "translateZ(40px)",
-            mixBlendMode: "overlay",
+            transform: "translateZ(35px)",
+            mixBlendMode: "soft-light",
           }}
           animate={{
             background: `linear-gradient(
-              ${135 + orientation.x * 60}deg,
-              rgba(255,255,255,0) 0%,
-              rgba(255,255,255,${0.12 + Math.abs(orientation.x) * 0.12}) 45%,
-              rgba(255,255,255,0) 55%,
-              rgba(255,255,255,0) 100%
+              ${125 + orientation.x * 70}deg,
+              transparent 0%,
+              transparent 40%,
+              rgba(255,255,255,${0.25 + Math.abs(orientation.x) * 0.2}) 50%,
+              transparent 60%,
+              transparent 100%
             )`,
           }}
           transition={{ duration: 0.05 }}
         />
 
-        {/* Depth-based ambient occlusion */}
+        {/* EDGE DEPTH SHADOW */}
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
-            transform: "translateZ(35px)",
+            transform: "translateZ(32px)",
             boxShadow: `
-              inset ${orientation.x * 5}px ${
-              orientation.y * 5
-            }px 15px rgba(255,255,255,0.2),
-              inset ${-orientation.x * 4}px ${
-              -orientation.y * 4
-            }px 12px rgba(0,0,0,0.3)
+              inset ${orientation.x * 8}px ${
+              orientation.y * 8
+            }px 25px rgba(255,255,255,0.12),
+              inset ${-orientation.x * 6}px ${
+              -orientation.y * 6
+            }px 20px rgba(0,0,0,0.2)
             `,
             borderRadius: "inherit",
           }}
         />
       </motion.div>
-
-      {/* Loading state */}
-      {!isLoaded && (
-        <div className="absolute inset-0 bg-gray-900 animate-pulse" />
-      )}
     </motion.div>
   );
 };
 
-// Skin tone detection using color thresholds
-function detectSkinTone(r: number, g: number, b: number): boolean {
-  // Multiple skin tone detection methods for diverse skin colors
+/**
+ * Create background image with the person area filled/inpainted
+ */
+async function createBackgroundWithPersonRemoved(
+  imageSrc: string,
+  maskDataUrl: string
+): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
 
-  // Method 1: RGB ratios
-  const rgRatio = r / (g + 1);
-  const rbRatio = r / (b + 1);
-  const isRGBSkin =
-    r > 60 &&
-    g > 40 &&
-    b > 20 &&
-    r > g &&
-    r > b &&
-    rgRatio > 1.0 &&
-    rgRatio < 1.8 &&
-    rbRatio > 1.0 &&
-    rbRatio < 2.5;
+    img.onload = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d")!;
 
-  // Method 2: YCbCr color space approximation
-  const y = 0.299 * r + 0.587 * g + 0.114 * b;
-  const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-  const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-  const isYCbCrSkin = y > 80 && cb > 85 && cb < 135 && cr > 135 && cr < 180;
+      // Draw original image
+      ctx.drawImage(img, 0, 0);
 
-  // Method 3: HSV-based detection for darker skin tones
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const diff = max - min;
-  let h = 0;
-  if (diff !== 0) {
-    if (max === r) h = ((g - b) / diff) % 6;
-    else if (max === g) h = (b - r) / diff + 2;
-    else h = (r - g) / diff + 4;
-  }
-  h = Math.round(h * 60);
-  if (h < 0) h += 360;
-  const s = max === 0 ? 0 : diff / max;
-  const isHSVSkin = h >= 0 && h <= 50 && s >= 0.1 && s <= 0.7;
+      // Load mask
+      const maskImg = new Image();
+      maskImg.onload = () => {
+        // Create mask canvas at same size as image
+        const maskCanvas = document.createElement("canvas");
+        maskCanvas.width = img.width;
+        maskCanvas.height = img.height;
+        const maskCtx = maskCanvas.getContext("2d")!;
+        maskCtx.drawImage(maskImg, 0, 0, img.width, img.height);
 
-  return isRGBSkin || isYCbCrSkin || isHSVSkin;
-}
+        const maskData = maskCtx.getImageData(0, 0, img.width, img.height);
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
 
-// Sigmoid function for sharper depth transitions
-function sigmoid(x: number): number {
-  return 1 / (1 + Math.exp(-x * 4));
-}
+        // Fill person area with blurred/averaged background colors
+        const blurRadius = 20;
+        const data = imageData.data;
+        const mask = maskData.data;
 
-// Edge-aware smoothing to preserve subject boundaries
-function edgeAwareSmooth(
-  depth: number[],
-  width: number,
-  height: number,
-  imageData: Uint8ClampedArray
-): number[] {
-  const result = new Array(depth.length);
-  const kernel = 3;
-  const halfKernel = Math.floor(kernel / 2);
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      let sum = 0;
-      let weightSum = 0;
-
-      const centerR = imageData[idx * 4];
-      const centerG = imageData[idx * 4 + 1];
-      const centerB = imageData[idx * 4 + 2];
-
-      for (let ky = -halfKernel; ky <= halfKernel; ky++) {
-        for (let kx = -halfKernel; kx <= halfKernel; kx++) {
-          const nx = x + kx;
-          const ny = y + ky;
-
-          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            const nIdx = ny * width + nx;
-
-            // Color similarity weight (edge-aware)
-            const nR = imageData[nIdx * 4];
-            const nG = imageData[nIdx * 4 + 1];
-            const nB = imageData[nIdx * 4 + 2];
-
-            const colorDiff =
-              Math.sqrt(
-                Math.pow(centerR - nR, 2) +
-                  Math.pow(centerG - nG, 2) +
-                  Math.pow(centerB - nB, 2)
-              ) / 441.67; // Normalize by max possible diff
-
-            const colorWeight = Math.exp(-colorDiff * 5);
-
-            // Spatial weight
-            const spatialDist = Math.sqrt(kx * kx + ky * ky);
-            const spatialWeight = Math.exp(-spatialDist / 2);
-
-            const weight = colorWeight * spatialWeight;
-            sum += depth[nIdx] * weight;
-            weightSum += weight;
+        // First pass: get average background color
+        let bgR = 0,
+          bgG = 0,
+          bgB = 0,
+          bgCount = 0;
+        for (let i = 0; i < mask.length; i += 4) {
+          if (mask[i] < 128) {
+            // Background pixel
+            bgR += data[i];
+            bgG += data[i + 1];
+            bgB += data[i + 2];
+            bgCount++;
           }
         }
+        if (bgCount > 0) {
+          bgR = Math.round(bgR / bgCount);
+          bgG = Math.round(bgG / bgCount);
+          bgB = Math.round(bgB / bgCount);
+        }
+
+        // Second pass: for each person pixel, sample from nearby background
+        for (let y = 0; y < img.height; y++) {
+          for (let x = 0; x < img.width; x++) {
+            const idx = (y * img.width + x) * 4;
+            const maskValue = mask[idx];
+
+            if (maskValue > 50) {
+              // Person pixel - need to fill with background
+              // Sample from nearby non-person pixels
+              let sumR = 0,
+                sumG = 0,
+                sumB = 0,
+                count = 0;
+
+              for (let dy = -blurRadius; dy <= blurRadius; dy++) {
+                for (let dx = -blurRadius; dx <= blurRadius; dx++) {
+                  const nx = x + dx;
+                  const ny = y + dy;
+                  if (nx >= 0 && nx < img.width && ny >= 0 && ny < img.height) {
+                    const nIdx = (ny * img.width + nx) * 4;
+                    if (mask[nIdx] < 50) {
+                      // Background pixel
+                      const dist = Math.sqrt(dx * dx + dy * dy);
+                      const weight = 1 / (1 + dist * 0.5);
+                      sumR += data[nIdx] * weight;
+                      sumG += data[nIdx + 1] * weight;
+                      sumB += data[nIdx + 2] * weight;
+                      count += weight;
+                    }
+                  }
+                }
+              }
+
+              if (count > 0) {
+                data[idx] = Math.round(sumR / count);
+                data[idx + 1] = Math.round(sumG / count);
+                data[idx + 2] = Math.round(sumB / count);
+              } else {
+                // Fallback to average background color
+                data[idx] = bgR;
+                data[idx + 1] = bgG;
+                data[idx + 2] = bgB;
+              }
+            }
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+
+        // Apply blur to smooth the filled areas
+        ctx.filter = "blur(8px)";
+        ctx.drawImage(canvas, 0, 0);
+        ctx.filter = "none";
+
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      };
+      maskImg.src = maskDataUrl;
+    };
+
+    img.src = imageSrc;
+  });
+}
+
+/**
+ * Component that renders only the person with transparent background
+ */
+function PersonCutout({
+  src,
+  mask,
+  alt,
+}: {
+  src: string;
+  mask: string;
+  alt: string;
+}) {
+  const [cutoutImage, setCutoutImage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    // Create image with transparent background using the mask
+    const createCutout = async () => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d")!;
+
+      // Load original image
+      const img = await loadImageAsync(src);
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      // Load mask
+      const maskImg = await loadImageAsync(mask);
+
+      // Create mask canvas at same size
+      const maskCanvas = document.createElement("canvas");
+      maskCanvas.width = img.width;
+      maskCanvas.height = img.height;
+      const maskCtx = maskCanvas.getContext("2d")!;
+      maskCtx.drawImage(maskImg, 0, 0, img.width, img.height);
+
+      // Get image data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const maskData = maskCtx.getImageData(0, 0, canvas.width, canvas.height);
+
+      // Apply mask to alpha channel - person is visible, background is transparent
+      for (let i = 0; i < imageData.data.length; i += 4) {
+        const maskValue = maskData.data[i]; // Red channel of mask
+        // Where mask is white (255) = person = visible
+        // Where mask is black (0) = background = transparent
+        imageData.data[i + 3] = maskValue; // Set alpha to mask value
       }
 
-      result[idx] = weightSum > 0 ? sum / weightSum : depth[idx];
-    }
+      ctx.putImageData(imageData, 0, 0);
+      setCutoutImage(canvas.toDataURL("image/png"));
+    };
+
+    createCutout();
+  }, [src, mask]);
+
+  if (!cutoutImage) {
+    return <div className="w-full h-full animate-pulse bg-transparent" />;
   }
 
-  return result;
+  return (
+    <img src={cutoutImage} alt={alt} className="w-full h-full object-cover" />
+  );
+}
+
+/**
+ * Helper to load image as promise
+ */
+function loadImageAsync(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
 }
 
 export default DepthPhoto3D;
