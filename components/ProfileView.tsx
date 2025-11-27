@@ -27,7 +27,11 @@ import {
   useTransform,
   useAnimation,
 } from "framer-motion";
-import { HIGHLIGHT_IMAGES, HIGHLIGHT_SELFIES, FACE_ASSETS_URL } from "../constants";
+import {
+  HIGHLIGHT_IMAGES,
+  HIGHLIGHT_SELFIES,
+  FACE_ASSETS_URL,
+} from "../constants";
 
 interface ProfileViewProps {
   user: User;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, RefObject } from "react";
 
 // Configuration - must match face generation parameters
 const P_MIN = -15; // Minimum gaze value
@@ -45,7 +45,7 @@ const getImageFilename = (px: number, py: number): string => {
 };
 
 export const useGazeTracking = (
-  containerRef: React.RefObject<HTMLElement | null>,
+  containerRef: RefObject<HTMLElement | null>,
   options: UseGazeTrackingOptions = {}
 ): GazeState => {
   const { basePath = "/faces/", smoothing = 0.15 } = options;
@@ -65,26 +65,28 @@ export const useGazeTracking = (
   const isGyroscopeActiveRef = useRef(false);
   const loadedImagesRef = useRef<Set<string>>(new Set());
 
-  // Check if images exist on mount
+  // Check if images exist on mount (using Image to avoid CORS issues with fetch)
   useEffect(() => {
-    const checkImages = async () => {
-      const testPath = `${basePath}${getImageFilename(0, 0)}`;
-      try {
-        const response = await fetch(testPath, { method: "HEAD" });
-        setState((prev) => ({
-          ...prev,
-          hasImages: response.ok,
-          isLoading: false,
-        }));
-      } catch {
-        setState((prev) => ({
-          ...prev,
-          hasImages: false,
-          isLoading: false,
-        }));
-      }
+    const testPath = `${basePath}${getImageFilename(0, 0)}`;
+    const img = new Image();
+
+    img.onload = () => {
+      setState((prev) => ({
+        ...prev,
+        hasImages: true,
+        isLoading: false,
+      }));
     };
-    checkImages();
+
+    img.onerror = () => {
+      setState((prev) => ({
+        ...prev,
+        hasImages: false,
+        isLoading: false,
+      }));
+    };
+
+    img.src = testPath;
   }, [basePath]);
 
   // Preload nearby images for smooth transitions
