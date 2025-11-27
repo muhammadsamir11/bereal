@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import Button from "./Button";
 import MemoriesCalendar from "./MemoriesCalendar";
-import DepthPhoto3D from "./DepthPhoto3D";
+import FacePhotoTracker from "./FacePhotoTracker";
 import {
   motion,
   animate,
@@ -391,12 +391,11 @@ const ProfileView: React.FC<ProfileViewProps> = ({
               animate={avatarControls} // Apply breathing/pulse animation to just the card
               className="w-32 h-44 rounded-2xl bg-black border-2 border-white overflow-hidden relative z-10"
             >
-              <DepthPhoto3D
-                src={user.avatarUrl}
-                alt={user.username}
+              <FacePhotoTracker
+                basePath="/faces/"
+                fallbackImage={user.avatarUrl}
                 width={128}
                 height={176}
-                tiltIntensity={0.8}
                 className="w-full h-full rounded-xl"
               />
             </motion.div>
