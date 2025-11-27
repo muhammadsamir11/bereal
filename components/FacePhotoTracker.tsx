@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useGazeTracking, GAZE_CONFIG } from "../hooks/useGazeTracking";
+import { FACE_ASSETS_URL } from "../constants";
 
 interface FacePhotoTrackerProps {
   basePath?: string; // Path to faces folder (default: "/faces/")
@@ -23,7 +24,7 @@ interface FacePhotoTrackerProps {
  * 3. Use this component to display the interactive face
  */
 const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
-  basePath = "/faces/",
+  basePath = FACE_ASSETS_URL,
   className = "",
   width = 128,
   height = 176,

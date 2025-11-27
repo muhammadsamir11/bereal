@@ -1,6 +1,9 @@
 
 import { User, Memory } from './types';
 
+// Face tracking images hosted on S3
+export const FACE_ASSETS_URL = "https://my-app-faces-assets.s3.us-east-1.amazonaws.com/";
+
 export const CURRENT_USER: User = {
   id: 'u1',
   username: 'abbygreen',

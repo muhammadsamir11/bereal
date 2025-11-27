@@ -27,7 +27,7 @@ import {
   useTransform,
   useAnimation,
 } from "framer-motion";
-import { HIGHLIGHT_IMAGES, HIGHLIGHT_SELFIES } from "../constants";
+import { HIGHLIGHT_IMAGES, HIGHLIGHT_SELFIES, FACE_ASSETS_URL } from "../constants";
 
 interface ProfileViewProps {
   user: User;
@@ -392,7 +392,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({
               className="w-32 h-44 rounded-2xl bg-black border-2 border-white overflow-hidden relative z-10"
             >
               <FacePhotoTracker
-                basePath="/faces/"
+                basePath={FACE_ASSETS_URL}
                 fallbackImage={user.avatarUrl}
                 width={128}
                 height={176}
