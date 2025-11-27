@@ -395,13 +395,21 @@ const ProfileView: React.FC<ProfileViewProps> = ({
               animate={avatarControls} // Apply breathing/pulse animation to just the card
               className="w-32 h-44 rounded-2xl bg-black border-2 border-white overflow-hidden relative z-10"
             >
-              <FacePhotoTracker
-                basePath={FACE_ASSETS_URL}
-                fallbackImage={user.avatarUrl}
-                width={128}
-                height={176}
-                className="w-full h-full rounded-xl"
-              />
+              {isCurrentUser ? (
+                <FacePhotoTracker
+                  basePath={FACE_ASSETS_URL}
+                  fallbackImage={user.avatarUrl}
+                  width={128}
+                  height={176}
+                  className="w-full h-full rounded-xl"
+                />
+              ) : (
+                <img
+                  src={user.avatarUrl}
+                  alt={user.username}
+                  className="w-full h-full object-cover rounded-xl"
+                />
+              )}
             </motion.div>
 
             {/* Streak Badge */}

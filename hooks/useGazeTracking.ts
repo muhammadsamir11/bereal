@@ -111,18 +111,18 @@ export const useGazeTracking = (
     [basePath]
   );
 
-  // Animation loop for smooth interpolation
+  // Animation loop for smooth interpolation (video-like feel)
   const animate = useCallback(() => {
-    currentRef.current.x = lerp(
-      currentRef.current.x,
-      targetRef.current.x,
-      smoothing
-    );
-    currentRef.current.y = lerp(
-      currentRef.current.y,
-      targetRef.current.y,
-      smoothing
-    );
+    // Exponential smoothing for more natural movement
+    const smoothFactor = smoothing;
+
+    // Calculate velocity for momentum-like effect
+    const dx = targetRef.current.x - currentRef.current.x;
+    const dy = targetRef.current.y - currentRef.current.y;
+
+    // Apply smoothing with slight acceleration for responsiveness
+    currentRef.current.x += dx * smoothFactor;
+    currentRef.current.y += dy * smoothFactor;
 
     // Convert normalized (-1 to 1) to gaze coordinates
     const rawPx = currentRef.current.x * P_MAX;

@@ -1,10 +1,10 @@
-import React, { useRef, useState, useEffect } from "react";
-import { motion } from "framer-motion";
+import React, { useRef, useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useGazeTracking, GAZE_CONFIG } from "../hooks/useGazeTracking";
 import { FACE_ASSETS_URL } from "../constants";
 
 interface FacePhotoTrackerProps {
-  basePath?: string; // Path to faces folder (default: "/faces/")
+  basePath?: string; // Path to faces folder (default: S3 URL)
   className?: string;
   width?: number;
   height?: number;
@@ -16,12 +16,7 @@ interface FacePhotoTrackerProps {
  * FacePhotoTracker - AI-powered gaze-tracking face component
  *
  * Displays pre-generated face images that follow the user's cursor or device orientation.
- * Based on: https://github.com/kylan02/face_looker
- *
- * Usage:
- * 1. Generate face images using Replicate's expression-editor model
- * 2. Place images in /public/faces/ with naming: gaze_px{X}_py{Y}_256.webp
- * 3. Use this component to display the interactive face
+ * Uses crossfade transitions for smooth video-like effect.
  */
 const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
   basePath = FACE_ASSETS_URL,
@@ -32,56 +27,112 @@ const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
   fallbackImage,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Track the last successfully loaded image to prevent black flashes
-  const [displayedImage, setDisplayedImage] = useState<string | null>(null);
-  const [isTransitioning, setIsTransitioning] = useState(false);
-  const preloadingRef = useRef<HTMLImageElement | null>(null);
 
+  // Two-layer crossfade system for smooth transitions
+  const [layers, setLayers] = useState<{
+    front: string | null;
+    back: string | null;
+  }>({
+    front: null,
+    back: null,
+  });
+  const [frontOpacity, setFrontOpacity] = useState(1);
+  const loadingRef = useRef<Set<string>>(new Set());
+  const currentPathRef = useRef<string | null>(null);
+
+  // Higher smoothing for video-like feel
   const { px, py, imagePath, isLoading, hasImages } = useGazeTracking(
     containerRef,
-    { basePath, smoothing: 0.2 }
+    { basePath, smoothing: 0.08 } // Lower = smoother, more responsive
   );
 
-  // Preload new image before switching - prevents black flash
+  // Preload image and return promise
+  const preloadImage = useCallback((src: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      if (loadingRef.current.has(src)) {
+        resolve(src);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        loadingRef.current.add(src);
+        resolve(src);
+      };
+      img.onerror = reject;
+      img.src = src;
+    });
+  }, []);
+
+  // Crossfade to new image
   useEffect(() => {
     if (!imagePath || !hasImages) return;
+    if (imagePath === currentPathRef.current) return;
 
-    // If this is the first image, load it directly
-    if (!displayedImage) {
-      const img = new Image();
-      img.onload = () => setDisplayedImage(imagePath);
-      img.onerror = () => {
-        // On error, try fallback
-        if (fallbackImage) setDisplayedImage(fallbackImage);
-      };
-      img.src = imagePath;
+    currentPathRef.current = imagePath;
+
+    // First image - load directly
+    if (!layers.front && !layers.back) {
+      preloadImage(imagePath)
+        .then(() => {
+          setLayers({ front: imagePath, back: null });
+          setFrontOpacity(1);
+        })
+        .catch(() => {
+          if (fallbackImage) {
+            setLayers({ front: fallbackImage, back: null });
+          }
+        });
       return;
     }
 
-    // For subsequent images, preload before switching
-    if (imagePath !== displayedImage) {
-      setIsTransitioning(true);
+    // Crossfade: move current front to back, new image to front
+    preloadImage(imagePath)
+      .then(() => {
+        setLayers((prev) => ({
+          front: imagePath,
+          back: prev.front, // Keep previous as background
+        }));
+        // Quick crossfade
+        setFrontOpacity(0);
+        requestAnimationFrame(() => {
+          setFrontOpacity(1);
+        });
+      })
+      .catch(() => {
+        // Keep current on error
+      });
+  }, [
+    imagePath,
+    hasImages,
+    layers.front,
+    layers.back,
+    preloadImage,
+    fallbackImage,
+  ]);
 
-      // Cancel previous preload
-      if (preloadingRef.current) {
-        preloadingRef.current.onload = null;
-        preloadingRef.current.onerror = null;
-      }
+  // Preload adjacent images for instant transitions
+  useEffect(() => {
+    if (!hasImages || !basePath) return;
 
-      const img = new Image();
-      preloadingRef.current = img;
+    const preloadAdjacent = () => {
+      const offsets = [-3, 0, 3];
+      offsets.forEach((dx) => {
+        offsets.forEach((dy) => {
+          const adjPx = Math.max(-15, Math.min(15, px + dx));
+          const adjPy = Math.max(-15, Math.min(15, py + dy));
+          const filename = GAZE_CONFIG.getImageFilename(adjPx, adjPy);
+          const src = `${basePath}${filename}`;
+          if (!loadingRef.current.has(src)) {
+            const img = new Image();
+            img.onload = () => loadingRef.current.add(src);
+            img.src = src;
+          }
+        });
+      });
+    };
 
-      img.onload = () => {
-        setDisplayedImage(imagePath);
-        setIsTransitioning(false);
-      };
-      img.onerror = () => {
-        // Keep current image on error, don't go black
-        setIsTransitioning(false);
-      };
-      img.src = imagePath;
-    }
-  }, [imagePath, hasImages, displayedImage, fallbackImage]);
+    preloadAdjacent();
+  }, [px, py, hasImages, basePath]);
 
   // Show fallback when images aren't available
   if (!hasImages && !isLoading) {
@@ -104,25 +155,41 @@ const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
       style={{ width, height }}
     >
       {/* Loading state - only show on initial load */}
-      {isLoading && !displayedImage && (
+      {isLoading && !layers.front && (
         <div className="absolute inset-0 bg-gray-900/50 flex items-center justify-center z-10">
           <div className="w-6 h-6 border-2 border-white/40 border-t-white rounded-full animate-spin" />
         </div>
       )}
 
-      {/* Main face image - always visible once loaded */}
-      {displayedImage && (
+      {/* Back layer (previous image) */}
+      {layers.back && (
         <img
-          src={displayedImage}
-          alt="Interactive face"
-          className="w-full h-full object-cover"
+          src={layers.back}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover"
           draggable={false}
           style={{ userSelect: "none", pointerEvents: "none" }}
         />
       )}
 
+      {/* Front layer (current image) with crossfade */}
+      {layers.front && (
+        <img
+          src={layers.front}
+          alt="Interactive face"
+          className="absolute inset-0 w-full h-full object-cover"
+          draggable={false}
+          style={{
+            userSelect: "none",
+            pointerEvents: "none",
+            opacity: frontOpacity,
+            transition: "opacity 50ms ease-out", // Fast crossfade for video-like feel
+          }}
+        />
+      )}
+
       {/* Fallback if no image loaded yet */}
-      {!displayedImage && fallbackImage && !isLoading && (
+      {!layers.front && fallbackImage && !isLoading && (
         <img
           src={fallbackImage}
           alt="Profile"
@@ -138,9 +205,6 @@ const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
           <div className="text-[10px] text-white/60 mt-1">
             {GAZE_CONFIG.getImageFilename(px, py)}
           </div>
-          {isTransitioning && (
-            <div className="text-yellow-400 text-[10px]">loading...</div>
-          )}
         </div>
       )}
 
@@ -152,11 +216,11 @@ const FacePhotoTracker: React.FC<FacePhotoTrackerProps> = ({
           background: `linear-gradient(
             ${135 + (px / 15) * 45}deg,
             transparent 30%,
-            rgba(255,255,255,0.15) 50%,
+            rgba(255,255,255,0.12) 50%,
             transparent 70%
           )`,
         }}
-        transition={{ duration: 0.1 }}
+        transition={{ duration: 0.05 }}
       />
     </div>
   );
