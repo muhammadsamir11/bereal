@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { View, User } from "./types";
 import {
   CURRENT_USER,
@@ -14,55 +14,110 @@ import Button from "./components/Button";
 import { Search, BadgeCheck, UserPlus } from "lucide-react";
 import { AnimatePresence, motion, PanInfo } from "framer-motion";
 
+// Helper to get user by ID
+const getUserById = (id: string): User => {
+  const users = [CURRENT_USER, FRIEND_USER, OFFICIAL_USER, NON_FRIEND_USER];
+  return users.find((u) => u.id === id) || CURRENT_USER;
+};
+
+// Type for browser history state
+interface HistoryState {
+  view: View;
+  userId: string;
+  index: number;
+}
+
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>(View.FRIENDS);
   const [viewingUser, setViewingUser] = useState<User>(CURRENT_USER);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // History stack to store { View, User } tuples
-  const [history, setHistory] = useState<{ view: View; user: User }[]>([]);
   // Direction state for animation: 0 = fade, 1 = push (right to left), -1 = pop (left to right)
   const [direction, setDirection] = useState<number>(0);
+
+  // Track history index for browser history integration
+  const historyIndexRef = useRef(0);
+  // Flag to prevent pushing to history during popstate handling
+  const isPopstateRef = useRef(false);
 
   // Group users for search/filtering
   const myFriends = [FRIEND_USER];
   const suggestions = [OFFICIAL_USER, NON_FRIEND_USER];
 
-  // Helper to push current state to history before navigation
-  const pushToHistory = () => {
-    setHistory((prev) => [...prev, { view: currentView, user: viewingUser }]);
-  };
+  // Initialize browser history state on mount
+  useEffect(() => {
+    const initialState: HistoryState = {
+      view: View.FRIENDS,
+      userId: CURRENT_USER.id,
+      index: 0,
+    };
+    window.history.replaceState(initialState, "");
+  }, []);
+
+  // Listen for browser back/forward navigation
+  useEffect(() => {
+    const handlePopstate = (event: PopStateEvent) => {
+      const state = event.state as HistoryState | null;
+      if (state) {
+        isPopstateRef.current = true;
+
+        // Determine animation direction based on history index
+        const newDirection = state.index < historyIndexRef.current ? -1 : 1;
+        setDirection(newDirection);
+        historyIndexRef.current = state.index;
+
+        // Restore the state
+        setViewingUser(getUserById(state.userId));
+        setCurrentView(state.view);
+
+        // Reset flag after state updates
+        setTimeout(() => {
+          isPopstateRef.current = false;
+        }, 0);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopstate);
+    return () => window.removeEventListener("popstate", handlePopstate);
+  }, []);
+
+  // Push state to browser history
+  const pushBrowserHistory = useCallback((view: View, user: User) => {
+    if (isPopstateRef.current) return; // Don't push during popstate handling
+
+    historyIndexRef.current += 1;
+    const state: HistoryState = {
+      view,
+      userId: user.id,
+      index: historyIndexRef.current,
+    };
+    window.history.pushState(state, "");
+  }, []);
 
   const handleNav = (view: View, dir: number = 0) => {
     if (view === currentView) return;
-    pushToHistory();
     setDirection(dir);
+
+    const targetUser = view === View.PROFILE ? CURRENT_USER : viewingUser;
     if (view === View.PROFILE) {
       setViewingUser(CURRENT_USER);
     }
+
+    pushBrowserHistory(view, targetUser);
     setCurrentView(view);
   };
 
   const handleBack = () => {
     setDirection(-1); // Pop animation
-    if (history.length > 0) {
-      const previousState = history[history.length - 1];
-      // Remove last item
-      setHistory((prev) => prev.slice(0, -1));
-      // Restore state
-      setViewingUser(previousState.user);
-      setCurrentView(previousState.view);
-    } else {
-      // Fallback default navigation if history is empty
-      setCurrentView(View.FRIENDS);
-    }
+    // Use browser's native back
+    window.history.back();
   };
 
   const handleViewProfile = (user: User) => {
-    pushToHistory();
     setDirection(1); // Push animation
     setViewingUser(user);
     setCurrentView(View.OTHER_PROFILE);
+    pushBrowserHistory(View.OTHER_PROFILE, user);
   };
 
   // Swipe Handler for Navigation
@@ -78,9 +133,12 @@ const App: React.FC = () => {
     const isLeftSwipe =
       info.offset.x < -SWIPE_THRESHOLD || info.velocity.x < -VELOCITY_THRESHOLD;
 
+    // Check if we can go back (have browser history beyond initial state)
+    const canGoBack = historyIndexRef.current > 0;
+
     // Swipe Right (User moves finger Left -> Right) -> Go Back / Previous Tab
     if (isRightSwipe) {
-      if (history.length > 0) {
+      if (canGoBack) {
         handleBack();
       } else {
         // Tab Navigation (Previous) with reverse animation
@@ -92,7 +150,7 @@ const App: React.FC = () => {
 
     // Swipe Left (User moves finger Right -> Left) -> Go Next Tab
     else if (isLeftSwipe) {
-      if (history.length === 0) {
+      if (!canGoBack) {
         // Tab Navigation (Next) with forward animation
         if (currentView === View.FRIENDS) handleNav(View.CAMERA, 1);
         else if (currentView === View.CAMERA) handleNav(View.PROFILE, 1);
