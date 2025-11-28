@@ -266,7 +266,7 @@ const App: React.FC = () => {
                         <div className="relative">
                           <img
                             src={friend.avatarUrl}
-                            className="w-12 h-14 rounded-xl object-cover border border-white/20"
+                            className="w-12 h-14 object-cover border border-white/20 profile-photo"
                             alt={friend.displayName}
                           />
                         </div>
@@ -301,7 +301,7 @@ const App: React.FC = () => {
                         <div className="relative">
                           <img
                             src={user.avatarUrl}
-                            className="w-12 h-14 rounded-xl object-cover border border-white/20"
+                            className="w-12 h-14 object-cover border border-white/20 profile-photo"
                             alt={user.displayName}
                           />
                         </div>

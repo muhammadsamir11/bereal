@@ -1,0 +1,25 @@
+/* Profile photo squircle styling */
+.profile-photo {
+  /* Fallback for browsers without corner-shape support */
+  border-radius: 8px;
+}
+
+@supports (corner-shape: squircle) {
+  .profile-photo {
+    border-radius: 16px;
+    corner-shape: squircle;
+  }
+}
+
+/* Larger profile photos (main avatar) */
+.profile-photo-lg {
+  /* Fallback for browsers without corner-shape support */
+  border-radius: 16px;
+}
+
+@supports (corner-shape: squircle) {
+  .profile-photo-lg {
+    border-radius: 44px;
+    corner-shape: squircle;
+  }
+}

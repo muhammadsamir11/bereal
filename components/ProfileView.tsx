@@ -393,7 +393,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({
           >
             <motion.div
               animate={avatarControls} // Apply breathing/pulse animation to just the card
-              className="w-32 h-44 rounded-2xl bg-black border-2 border-white overflow-hidden relative z-10"
+              className="w-32 h-44 bg-black border-2 border-white overflow-hidden relative z-10 profile-photo-lg"
             >
               {isCurrentUser ? (
                 <FacePhotoTracker
@@ -401,13 +401,13 @@ const ProfileView: React.FC<ProfileViewProps> = ({
                   fallbackImage={user.avatarUrl}
                   width={128}
                   height={176}
-                  className="w-full h-full rounded-xl"
+                  className="w-full h-full profile-photo-lg"
                 />
               ) : (
                 <img
                   src={user.avatarUrl}
                   alt={user.username}
-                  className="w-full h-full object-cover rounded-xl"
+                  className="w-full h-full object-cover profile-photo-lg"
                 />
               )}
             </motion.div>

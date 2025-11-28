@@ -9,8 +9,7 @@ export const CURRENT_USER: User = {
   displayName: "Abby",
   bio: "Living life in the moment.",
   // Stable high-quality portrait (Abby)
-  avatarUrl:
-    "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=1000&q=80",
+  avatarUrl: "/faces/gaze_px3p0_pym3p0_256.webp",
   coverUrl:
     "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80", // Lake/Landscape
   location: "Austin, USA",

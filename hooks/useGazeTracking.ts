@@ -167,23 +167,25 @@ export const useGazeTracking = (
     isGyroscopeActiveRef.current = true;
   }, []);
 
-  // Handle mouse movement
+  // Handle mouse movement (desktop only)
+  // Face looks toward cursor position on screen
   const handleMouseMove = useCallback(
     (event: MouseEvent) => {
-      if (isGyroscopeActiveRef.current || !containerRef.current) return;
+      // Calculate cursor position relative to screen center
+      const screenCenterX = window.innerWidth / 2;
+      const screenCenterY = window.innerHeight / 2;
 
-      const rect = containerRef.current.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-
-      // Calculate offset from center, normalized to -1 to 1
+      // Normalize to -1 to 1 range
+      // Right of center = positive X (face looks right)
+      // Below center = positive Y, but images use inverted Y (positive py = looking up in images)
       const normalizedX = clamp(
-        (event.clientX - centerX) / (window.innerWidth / 3),
+        (event.clientX - screenCenterX) / (window.innerWidth / 2),
         -1,
         1
       );
+      // Cursor below center should make face look down, which needs negative py in images
       const normalizedY = clamp(
-        (event.clientY - centerY) / (window.innerHeight / 3),
+        (screenCenterY - event.clientY) / (window.innerHeight / 2),
         -1,
         1
       );
@@ -193,12 +195,11 @@ export const useGazeTracking = (
         y: normalizedY,
       };
     },
-    [containerRef]
+    []
   );
 
   // Handle mouse leave - reset to center
   const handleMouseLeave = useCallback(() => {
-    if (isGyroscopeActiveRef.current) return;
     targetRef.current = { x: 0, y: 0 };
   }, []);
 
@@ -224,19 +225,32 @@ export const useGazeTracking = (
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
-      // Try gyroscope first
-      const hasGyroscope = typeof DeviceOrientationEvent !== "undefined";
+    // Detect if device is mobile/tablet (has touch and is small screen)
+    const isMobile = () => {
+      return (
+        "ontouchstart" in window ||
+        navigator.maxTouchPoints > 0 ||
+        window.matchMedia("(max-width: 768px)").matches
+      );
+    };
 
-      if (hasGyroscope) {
-        const permitted = await requestPermission();
-        if (permitted && mounted) {
-          window.addEventListener("deviceorientation", handleOrientation);
+    const init = async () => {
+      const mobile = isMobile();
+
+      // Use gyroscope only on mobile devices
+      if (mobile) {
+        const hasGyroscope = typeof DeviceOrientationEvent !== "undefined";
+        if (hasGyroscope) {
+          const permitted = await requestPermission();
+          if (permitted && mounted) {
+            window.addEventListener("deviceorientation", handleOrientation);
+            isGyroscopeActiveRef.current = true;
+          }
         }
       }
 
-      // Always set up mouse fallback
-      if (mounted) {
+      // Use mouse on desktop (non-mobile)
+      if (!mobile && mounted) {
         window.addEventListener("mousemove", handleMouseMove);
         window.addEventListener("mouseleave", handleMouseLeave);
       }
